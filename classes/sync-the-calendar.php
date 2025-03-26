@@ -114,151 +114,202 @@ class TheEventCalendarExt_Sync {
 
     private function sync_tribe_event_post($event) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
-
-        if ($event['post_id']) {
-            error_log('Update existing event');
-            $post_id = $event['post_id'];
-            // Update existing event
-            wp_update_post([
-                'ID' => $post_id,
-                'post_content' => $event['post_content'],
-                'post_date' => $event['post_start_date'],
-                'post_date_gmt' => $event['post_start_gmt_date'],
-                'post_modified' => $event['post_modified'],
-                'post_modified_gmt' => $event['post_modified_gmt'],
-                'post_status' => $event['post_status']
-            ]);
-        } else {
-            // Insert new event
-            error_log('Insert new event');
-            $post_id = wp_insert_post([
-                'post_title' => $event['post_title'],
-                'post_content' => $event['post_content'],
-                'post_type' => $event['post_type'],
-                'post_author' => $event['post_author'],
-                'post_date' => $event['post_start_date'],
-                'post_date_gmt' => $event['post_start_gmt_date'],
-                'post_modified' => $event['post_modified'],
-                'post_modified_gmt' => $event['post_modified_gmt'],
-                'post_status' => $event['post_status']
-            ]);
+    
+        try {
+            if ($event['post_id']) {
+                error_log('Update existing event');
+                $post_id = $event['post_id'];
+                // Update existing event
+                $update_result = wp_update_post([
+                    'ID' => $post_id,
+                    'post_content' => $event['post_content'],
+                    'post_date' => $event['post_start_date'],
+                    'post_date_gmt' => $event['post_start_gmt_date'],
+                    'post_modified' => $event['post_modified'],
+                    'post_modified_gmt' => $event['post_modified_gmt'],
+                    'post_status' => $event['post_status']
+                ], true);
+    
+                if (is_wp_error($update_result)) {
+                    throw new Exception("Failed to update event: " . $update_result->get_error_message());
+                }
+            } else {
+                // Insert new event
+                error_log('Insert new event');
+                $post_id = wp_insert_post([
+                    'post_title' => $event['post_title'],
+                    'post_content' => $event['post_content'],
+                    'post_type' => $event['post_type'],
+                    'post_author' => $event['post_author'],
+                    'post_date' => $event['post_start_date'],
+                    'post_date_gmt' => $event['post_start_gmt_date'],
+                    'post_modified' => $event['post_modified'],
+                    'post_modified_gmt' => $event['post_modified_gmt'],
+                    'post_status' => $event['post_status']
+                ], true);
+    
+                if (is_wp_error($post_id)) {
+                    throw new Exception("Failed to insert event: " . $post_id->get_error_message());
+                }
+            }
+    
+            if ($post_id) {
+                $meta_fields = [
+                    '_EventStartDate' => $event['post_start_date'],
+                    '_EventEndDate' => $event['post_end_date'],
+                    '_EventStartDateUTC' => $event['post_start_gmt_date'],
+                    '_EventEndDateUTC' => $event['post_end_gmt_date'],
+                    '_EventDuration' => $event['event_duration'],
+                    '_EventCurrencySymbol' => '$',
+                    '_EventCurrencyCode' => 'USD',
+                    '_EventCurrencyPosition' => 'prefix',
+                    '_EventCost' => '',
+                    '_EventURL' => '',
+                    '_EventTimezone' => $event['local_timezone'],
+                    '_EventTimezoneAbbr' => $event['timezone_abbr'],
+                    '_EventSourceID' => $event['event_source_id'],
+                    '_EventModifiedUser' => $event['mod_u']
+                ];
+    
+                foreach ($meta_fields as $key => $value) {
+                    $update_result = update_post_meta($post_id, $key, $value);
+                    if ($update_result === false) {
+                        throw new Exception("Failed to update post meta: $key");
+                    }
+                }
+            }
+            
+            return $post_id;
+    
+        } catch (Exception $e) {
+            error_log("Error in " . __CLASS__ . "::" . __FUNCTION__ . ": " . $e->getMessage());
+            // You might want to handle the error differently, e.g., return false or re-throw the exception
+            return false;
         }
-
-
-        if ($post_id) {
-            update_post_meta($post_id, '_EventStartDate', $event['post_start_date']);
-            update_post_meta($post_id, '_EventEndDate', $event['post_end_date']);
-            update_post_meta($post_id, '_EventStartDateUTC', $event['post_start_gmt_date']);
-            update_post_meta($post_id, '_EventEndDateUTC', $event['post_end_gmt_date']);
-            update_post_meta($post_id, '_EventDuration', $event['event_duration']);
-            update_post_meta($post_id, '_EventCurrencySymbol','$');
-            update_post_meta($post_id, '_EventCurrencyCode', 'USD');
-            update_post_meta($post_id, '_EventCurrencyPosition','prefix');
-            update_post_meta($post_id, '_EventCost','');
-            update_post_meta($post_id, '_EventURL','');
-            update_post_meta($post_id, '_EventTimezone', $event['local_timezone']);
-            update_post_meta($post_id, '_EventTimezoneAbbr', $event['timezone_abbr']);
-            update_post_meta($post_id, '_EventSourceID', $event['event_source_id']);
-            update_post_meta($post_id, '_EventModifiedUser', $event['mod_u']);
-        }
-        
-        return $post_id;
-
     }
+    
 
     private function sync_trive_events_event($event, $post_id) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
         global $wpdb;
-        $table = $wpdb->prefix . 'tec_events';
-    
-        $event_id = $this->get_existing_tec_event( $post_id );
-        $update_at = current_time('mysql');
-        $hash = '';
-
-        // Data array for update/insert
-        $record = array(
-            'post_id'        => $post_id,
-            'start_date'     => $event['post_start_date'],
-            'end_date'       => $event['post_end_date'],
-            'timezone'       => $event['local_timezone'],
-            'start_date_utc' => $event['post_start_gmt_date'],
-            'end_date_utc'   => $event['post_end_gmt_date'],
-            'duration'       => $event['event_duration'],
-            'updated_at'     => $update_at,
-            'hash'           => $hash,
-        );
-            
-        // Format for each value in the array
-        $format = array( '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s' );
         
-        if ( $event_id ) {
-            // Update record
-            $updated = $wpdb->update(
-                $table,
-                $record,
-                [ 'event_id' => $event_id ],
-                $format,
-                array( '%d' )
+        try {
+            $table = $wpdb->prefix . 'tec_events';
+        
+            $event_id = $this->get_existing_tec_event($post_id);
+            $update_at = current_time('mysql');
+            $hash = ''; // Consider generating a unique hash here
+    
+            // Data array for update/insert
+            $record = array(
+                'post_id'        => $post_id,
+                'start_date'     => $event['post_start_date'],
+                'end_date'       => $event['post_end_date'],
+                'timezone'       => $event['local_timezone'],
+                'start_date_utc' => $event['post_start_gmt_date'],
+                'end_date_utc'   => $event['post_end_gmt_date'],
+                'duration'       => $event['event_duration'],
+                'updated_at'     => $update_at,
+                'hash'           => $hash,
             );
+                
+            // Format for each value in the array
+            $format = array('%d', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s');
             
-            return $updated !== false ? $post_id : false;
-        } else {
-            // Add event_id to the record for insertion
-            $record['event_id'] = $event_id;
-            $format[] = '%d';
-    
-            $inserted = $wpdb->insert( $table, $record, $format );
-            
-            return $inserted ? $wpdb->insert_id : false;
+            if ($event_id) {
+                // Update record
+                $updated = $wpdb->update(
+                    $table,
+                    $record,
+                    ['event_id' => $event_id],
+                    $format,
+                    array('%d')
+                );
+                
+                if ($updated === false) {
+                    throw new Exception("Failed to update event: " . $wpdb->last_error);
+                }
+                
+                return $post_id;
+            } else {
+                // Add event_id to the record for insertion
+                $record['event_id'] = $event_id;
+                $format[] = '%d';
+        
+                $inserted = $wpdb->insert($table, $record, $format);
+                
+                if ($inserted === false) {
+                    throw new Exception("Failed to insert event: " . $wpdb->last_error);
+                }
+                
+                return $wpdb->insert_id;
+            }
+        } catch (Exception $e) {
+            error_log("Error in " . __CLASS__ . "::" . __FUNCTION__ . ": " . $e->getMessage());
+            // You might want to handle the error differently, e.g., return false or re-throw the exception
+            return false;
         }
-    
-    }
+    }    
 
     private function sync_trive_events_occurrence($event, $post_id, $event_id) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
-        $table_name = $this->wpdb->prefix . "tec_occurrences"; // Ensures compatibility with table prefix
-    
-        // Step 3: Check if occurrence exists in wp_tec_occurrences
-        $occurrence_id = $this->get_existing_tec_occurrence( $post_id, $event_id );
-
-        $string = trim(sanitize_textarea_field($event_data['desc'] ?? ''));
-
-        $unique_hash = hash('sha256', $string . time() . $event_id);
-
-        $record = [
-            'start_date'    => $event['post_start_date'],
-            'start_date_utc'=> $event['post_start_gmt_date'], // Assuming UTC is the same
-            'end_date'      => $event['post_end_date'],
-            'end_date_utc'  => $event['post_end_gmt_date'],
-            'duration'      => $event['event_duration'],
-            'updated_at'    => current_time('mysql'),
-            'hash'          => $unique_hash
-        ];
-    
-        // Format for each value in the array
-        $format = array( '%s', '%s', '%s', '%s', '%d', '%s', '%s');
         
-        if ($occurrence_id) {
-
-            $this->wpdb->update(
-                $table_name, 
-                $record, 
-                [ 'occurrence_id' => $occurrence_id ],
-                $format,
-                array( '%d' )
-            ); // Update existing entry
-
-        } else {
-
-            $record['post_ID'] = $post_id;
-            $record['event_id'] = $event_id;
-            $format[] = '%d';
-            $format[] = '%d';
-
-            $occurrence_id = $this->wpdb->insert($table_name, $record, $format); // Insert new event data
+        try {
+            $table_name = $this->wpdb->prefix . "tec_occurrences"; // Ensures compatibility with table prefix
+        
+            // Step 3: Check if occurrence exists in wp_tec_occurrences
+            $occurrence_id = $this->get_existing_tec_occurrence($post_id, $event_id);
+    
+            $string = trim(sanitize_textarea_field($event['desc'] ?? ''));
+    
+            $unique_hash = hash('sha256', $string . microtime(true) . wp_generate_uuid4() . $post_id . $event_id);
+    
+            $record = [
+                'start_date'    => $event['post_start_date'],
+                'start_date_utc'=> $event['post_start_gmt_date'], // Assuming UTC is the same
+                'end_date'      => $event['post_end_date'],
+                'end_date_utc'  => $event['post_end_gmt_date'],
+                'duration'      => $event['event_duration'],
+                'updated_at'    => current_time('mysql'),
+                'hash'          => $unique_hash
+            ];
+        
+            // Format for each value in the array
+            $format = array('%s', '%s', '%s', '%s', '%d', '%s', '%s');
+            
+            if ($occurrence_id) {
+                $result = $this->wpdb->update(
+                    $table_name, 
+                    $record, 
+                    ['occurrence_id' => $occurrence_id],
+                    $format,
+                    array('%d')
+                ); // Update existing entry
+                
+                if ($result === false) {
+                    throw new Exception("Failed to update occurrence: " . $this->wpdb->last_error);
+                }
+            } else {
+                $record['post_id'] = $post_id;
+                $record['event_id'] = $event_id;
+                $format[] = '%d';
+                $format[] = '%d';
+    
+                $result = $this->wpdb->insert($table_name, $record, $format); // Insert new event data
+                
+                if ($result === false) {
+                    throw new Exception("Failed to insert occurrence: " . $this->wpdb->last_error);
+                }
+                $occurrence_id = $this->wpdb->insert_id;
+            }
+            
+            return $occurrence_id;
+        } catch (Exception $e) {
+            error_log("Error in " . __CLASS__ . "::" . __FUNCTION__ . ": " . $e->getMessage());
+            // You might want to handle the error differently, e.g., return false or re-throw the exception
+            return false;
         }
-        return $occurrence_id;
-    }
+    }    
     
     private function get_event_duration($start_date, $end_date) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
