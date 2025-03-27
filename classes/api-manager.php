@@ -87,7 +87,7 @@ class TheEventCalendarExt_APIManager {
 
         $readonly_fields = ['daysmart_api_jwt_token', 'daysmart_events_last_run'];
         $readonly = in_array($field, $readonly_fields) ? 'readonly' : '';
-        echo "<input type='{$type}' name='{$field}' value='{$value}' class='regular-text' {$readonly}>";
+        echo "<input type='" . esc_attr($type) . "' name='" . esc_attr($field) . "' value='" . esc_attr($value) . "' class='regular-text' " . esc_attr($readonly) . ">";
     }
 
     // Fetch JWT Token from API
@@ -124,7 +124,8 @@ class TheEventCalendarExt_APIManager {
         $body = json_decode(wp_remote_retrieve_body($response), true);
 
         if (!empty($body['access_token'])) {
-            update_option('daysmart_api_jwt_token', $body['access_token']);
+            $sanitized_jwt = sanitize_text_field($body['access_token']);
+            update_option('daysmart_api_jwt_token', $sanitized_jwt);
             return $body['access_token'];
         }
 
@@ -188,7 +189,6 @@ public function fetch_content_content() {
     $return = $sync_instance->sync_events();
 
     if ($return) 
-        update_option('daysmart_events_next_link', $body['links']['last']);
         update_option('daysmart_events_last_run', gmdate('Y-m-d H:i:s', current_time('timestamp', true)));
     }
 

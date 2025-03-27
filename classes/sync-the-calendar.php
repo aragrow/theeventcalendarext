@@ -67,10 +67,12 @@ class TheEventCalendarExt_Sync {
         $event_data = $data['attributes'];
         $post_title = trim(sanitize_text_field($event_data['title'] ?? $event_data['desc']));
         $post_content = trim(sanitize_textarea_field($event_data['desc'] ?? ''));
-        $post_start_date = sanitize_text_field($event_data['start']);
-        $post_end_date = sanitize_text_field($event_data['end']);
-        $post_start_gmt_date = sanitize_text_field($event_data['start_gmt']);
-        $post_end_gmt_date = sanitize_text_field($event_data['end_gmt']);
+        
+        $post_start_date = sanitize_text_field(str_replace('T', ' ', $event_data['start']));
+        $post_end_date = sanitize_text_field(str_replace('T', ' ', $event_data['end']));
+        $post_start_gmt_date = sanitize_text_field(str_replace('T', ' ', $event_data['start_gmt']));
+        $post_end_gmt_date = sanitize_text_field(str_replace('T', ' ', $event_data['end_gmt']));
+        
         $post_status = $event_data['publish'] ? 'publish' : 'draft';
         $post_status = 'publish';
         $post_end_gmt_date = sanitize_text_field($event_data['end_gmt']);
@@ -118,8 +120,8 @@ class TheEventCalendarExt_Sync {
 
         try {
             if ($event['post_id']) {
-                error_log('Update existing event');
                 $post_id = $event['post_id'];
+
                 // Update existing event
                 $update_result = wp_update_post([
                     'ID' => $post_id,
@@ -132,9 +134,9 @@ class TheEventCalendarExt_Sync {
                 if (is_wp_error($update_result)) {
                     throw new Exception("Failed to update event: " . $update_result->get_error_message());
                 }
+                error_log("Update existing event ({$post_id})");
             } else {
                 // Insert new event
-                error_log('Insert new event');
                 $post_id = wp_insert_post([
                     'post_title' => $event['post_title'],
                     'post_content' => $event['post_content'],
@@ -151,6 +153,7 @@ class TheEventCalendarExt_Sync {
                 if (is_wp_error($post_id)) {
                     throw new Exception("Failed to insert event: " . $post_id->get_error_message());
                 }
+                error_log("Inserted new event ({$post_id})");
             }
     
             if ($post_id) {
@@ -173,9 +176,6 @@ class TheEventCalendarExt_Sync {
     
                 foreach ($meta_fields as $key => $value) {
                     $update_result = update_post_meta($post_id, $key, $value);
-                    if ($update_result === false) {
-                        throw new Exception("Failed to update post meta: $key");
-                    }
                 }
             }
             
@@ -191,6 +191,7 @@ class TheEventCalendarExt_Sync {
 
     private function sync_trive_events_event($event, $post_id) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
+        if(WP_DEBUG) error_log($post_id);
         global $wpdb;
         
         try {
@@ -198,8 +199,16 @@ class TheEventCalendarExt_Sync {
         
             $event_id = $this->get_existing_tec_event($post_id);
             $update_at = current_time('mysql');
-            $hash = ''; // Consider generating a unique hash here
+            $string = trim(sanitize_textarea_field($event['desc'] ?? ''));
     
+            $unique_hash = sha1(
+                $string . 
+                microtime(true) . 
+                wp_generate_uuid4() . 
+                $post_id 
+            );
+    
+            
             // Data array for update/insert
             $record = array(
                 'post_id'        => $post_id,
@@ -210,9 +219,10 @@ class TheEventCalendarExt_Sync {
                 'end_date_utc'   => $event['post_end_gmt_date'],
                 'duration'       => $event['event_duration'],
                 'updated_at'     => $update_at,
-                'hash'           => $hash,
+                'hash'           => $unique_hash,
             );
-                
+            error_log(print_r($record,true));
+
             // Format for each value in the array
             $format = array('%d', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s');
             
@@ -225,7 +235,7 @@ class TheEventCalendarExt_Sync {
                     $format,
                     array('%d')
                 );
-                
+                error_log($wpdb->last_query);
                 if ($updated === false) {
                     throw new Exception("Failed to update event: " . $wpdb->last_error);
                 }
