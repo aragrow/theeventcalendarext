@@ -107,6 +107,7 @@ class TheEventCalendarExt_Sync {
             'post_modified' => $post_modified,
             'post_modified_gmt' => $post_modified_gmt,
             'post_status' => $post_status,
+            'comment_status' => 'closed',
             'local_timezone' => $local_timezone,
             'timezone_abbr' => $timezone_abbr
         ];
@@ -114,7 +115,7 @@ class TheEventCalendarExt_Sync {
 
     private function sync_tribe_event_post($event) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
-    
+
         try {
             if ($event['post_id']) {
                 error_log('Update existing event');
@@ -123,11 +124,9 @@ class TheEventCalendarExt_Sync {
                 $update_result = wp_update_post([
                     'ID' => $post_id,
                     'post_content' => $event['post_content'],
-                    'post_date' => $event['post_start_date'],
-                    'post_date_gmt' => $event['post_start_gmt_date'],
                     'post_modified' => $event['post_modified'],
                     'post_modified_gmt' => $event['post_modified_gmt'],
-                    'post_status' => $event['post_status']
+                    'comment_status' => $event['comment_status']
                 ], true);
     
                 if (is_wp_error($update_result)) {
@@ -141,11 +140,12 @@ class TheEventCalendarExt_Sync {
                     'post_content' => $event['post_content'],
                     'post_type' => $event['post_type'],
                     'post_author' => $event['post_author'],
-                    'post_date' => $event['post_start_date'],
-                    'post_date_gmt' => $event['post_start_gmt_date'],
+                    'post_date' => $event['post_modified'],
+                    'post_date_gmt' => $event['post_modified_gmt'],
                     'post_modified' => $event['post_modified'],
                     'post_modified_gmt' => $event['post_modified_gmt'],
-                    'post_status' => $event['post_status']
+                    'post_status' => $event['post_status'],
+                    'comment_status' => $event['comment_status']
                 ], true);
     
                 if (is_wp_error($post_id)) {
@@ -262,8 +262,13 @@ class TheEventCalendarExt_Sync {
     
             $string = trim(sanitize_textarea_field($event['desc'] ?? ''));
     
-            $unique_hash = hash('sha256', $string . microtime(true) . wp_generate_uuid4() . $post_id . $event_id);
-    
+            $unique_hash = sha1(
+                $string . 
+                microtime(true) . 
+                wp_generate_uuid4() . 
+                $post_id . 
+                $event_id
+            );
             $record = [
                 'start_date'    => $event['post_start_date'],
                 'start_date_utc'=> $event['post_start_gmt_date'], // Assuming UTC is the same
@@ -333,15 +338,15 @@ class TheEventCalendarExt_Sync {
             'posts_per_page' => 1,
             'meta_query'     => [
                 [
-                    'key'     => 'event_id', // Adjust this meta key if needed
+                    'key'     => '_EventSourceID', // Adjust this meta key if needed
                     'value'   => $event_id,
                     'compare' => '='
                 ]
             ],
             'fields'         => 'id'
         ];
-        $post = get_posts($args);
-        return !empty($post) ? $post['ID'] : false;
+        $posts = get_posts($args);
+        return !empty($posts) ? $posts[0]->ID : false;
     }
 
     private function get_existing_tec_event( $post_id ) {

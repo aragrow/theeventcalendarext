@@ -135,10 +135,11 @@ class TheEventCalendarExt_APIManager {
 public function fetch_content_content() {
     if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
     $today = date('Y-m-d');
-    $page_size = 5;
+    $six_months_later = date('Y-m-d', strtotime('+6 months'));
+    $page_size = 100; // Increase page size to get more events at once
     $daysmart_content_type     = get_option('daysmart_api_content_type');
     $daysmart_jwt_token   = get_option('daysmart_api_jwt_token');
-    $daysmart_api_filters = "?filter[start_date__gte]={$today}&page%5Bsize%5D={$page_size}&filter[event_type_id]=b";
+    $daysmart_api_filters = "?filter[start_date__gte]={$today}&filter[start_date__lte]={$six_months_later}&page%5Bsize%5D={$page_size}&filter[event_type_id]=b";
     $daysmart_api_url     = get_option('daysmart_api_base_url').'events'.$daysmart_api_filters;
 
 
