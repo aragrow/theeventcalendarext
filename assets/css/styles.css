@@ -6,3 +6,20 @@
     font-size: 0.8em;
     font-weight: bold;
 }
+
+.category-checklist label {
+    font-size: 14px;
+    padding: 5px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background-color: #f9f9f9;
+    cursor: pointer;
+}
+
+.category-checklist input[type="checkbox"] {
+    margin-right: 10px;
+}
+
+.category-checklist label:hover {
+    background-color: #f0f0f0;
+}

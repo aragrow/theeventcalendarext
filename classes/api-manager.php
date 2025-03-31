@@ -24,6 +24,8 @@ class TheEventCalendarExt_APIManager {
         add_action('wp', [$this, 'schedule_content_refresh']);
         add_action('daysmart_api_manager_refresh_jwt_token', [$this, 'fetch_jwt_token']);
         add_action('daysmart_api_manager_refresh_content', [$this, 'fetch_content_content']);
+
+        add_action('update_option_daysmart_event_ids', [$this, 'update_option_daysmart_event_ids_callback'], 10, 3);
     }
 
     // Add Admin Menu Page
@@ -66,8 +68,11 @@ class TheEventCalendarExt_APIManager {
             'daysmart_api_client_secret'=> 'Client Secret',
             'daysmart_api_grant_type'   => 'Grant Type',
             'daysmart_api_content_type' => 'Content Type',
+            'daysmart_event_ids' => 'DaySmart Events',
+            'daysmart_events_last_url' => 'Last URL',
             'daysmart_api_jwt_token'    => 'JWT Token',
             'daysmart_events_last_run' => 'Last Run GTM',
+
         ];
 
         foreach ($fields as $field => $label) {
@@ -83,11 +88,53 @@ class TheEventCalendarExt_APIManager {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
         $field = $args['field'];
         $value = esc_attr(get_option($field, ''));
-        $type = ($field === 'daysmart_api_client_secret' || $field === 'daysmart_api_jwt_token') ? 'password' : 'text';
 
-        $readonly_fields = ['daysmart_api_jwt_token', 'daysmart_events_last_run'];
-        $readonly = in_array($field, $readonly_fields) ? 'readonly' : '';
-        echo "<input type='" . esc_attr($type) . "' name='" . esc_attr($field) . "' value='" . esc_attr($value) . "' class='regular-text' " . esc_attr($readonly) . ">";
+        if($field != 'daysmart_event_ids') {
+
+            $type = ($field === 'daysmart_api_client_secret' || $field === 'daysmart_api_jwt_token') ? 'password' : 'text';
+
+            $readonly_fields = ['daysmart_api_jwt_token', 'daysmart_events_last_run', 'daysmart_events_last_url'];
+            $readonly = in_array($field, $readonly_fields) ? 'readonly' : '';
+            echo '<div style="width: 100%;">';
+            echo "<input type='" . esc_attr($type) . "' name='" . esc_attr($field) . "' value='" . esc_attr($value) . "' class='regular-text' " . esc_attr($readonly) . ">";
+            echo '</div>';
+        } else {
+            
+            $selected_categories = get_option($field, []); // Retrieve saved values (default to empty array)
+            error_log(print_r($selected_categories,true));
+            $categories = get_terms([
+            'taxonomy' => 'tribe_events_cat',
+            'hide_empty' => false,
+            ]);
+
+            foreach ($categories as $category):
+                $is_checked = in_array($category->term_id, $selected_categories) ? 'checked' : ''; // Check if category is saved
+                echo "<input type='checkbox' name='".esc_attr($field)."[]' value='" . esc_attr($category->term_id). "' class='regular-text' ".$is_checked.">".esc_html($category->name); echo ' | ';
+            endforeach;
+        }
+    }
+
+    public function update_option_daysmart_event_ids_callback($old_value, $new_value, $option) {
+        if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
+        if (isset($_POST['daysmart_event_ids']) && is_array($_POST['daysmart_event_ids'])) {
+                // Sanitize input to ensure only integers are stored
+                $selected_categories = array_map('intval', $_POST['daysmart_event_ids']);
+                
+                // Update the option in the database
+                update_option('daysmart_event_ids', $selected_categories);
+
+                if (WP_DEBUG) {
+                    error_log('Selected event categories updated: ' . implode(', ', $selected_categories));
+                }
+        } else {
+            // Save an empty array if no categories are selected
+            update_option('daysmart_event_ids', []);
+
+            if (WP_DEBUG) {
+                error_log('No event categories selected. Saved an empty array.');
+            }
+        }
+    
     }
 
     // Fetch JWT Token from API
@@ -132,64 +179,83 @@ class TheEventCalendarExt_APIManager {
         return false;
     }
 
-// Fetch Content from API
-public function fetch_content_content() {
-    if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
-    $today = date('Y-m-d');
-    $six_months_later = date('Y-m-d', strtotime('+6 months'));
-    $page_size = 100; // Increase page size to get more events at once
-    $daysmart_content_type     = get_option('daysmart_api_content_type');
-    $daysmart_jwt_token   = get_option('daysmart_api_jwt_token');
-    $daysmart_api_filters = "?filter[start_date__gte]={$today}&filter[start_date__lte]={$six_months_later}&page%5Bsize%5D={$page_size}&filter[event_type_id]=b";
-    $daysmart_api_url     = get_option('daysmart_api_base_url').'events'.$daysmart_api_filters;
-
-
-    if (!$daysmart_jwt_token) {
-        $this->fetch_jwt_token();
+    // Fetch Content from API
+    public function fetch_content_content() {
+        if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
+        $today = date('Y-m-d');
+        $six_months_later = date('Y-m-d', strtotime('+6 months'));
+        $page_size = 100; // Increase page size to get more events at once
+        $daysmart_content_type     = get_option('daysmart_api_content_type');
         $daysmart_jwt_token   = get_option('daysmart_api_jwt_token');
+        $selected_categories = get_option('daysmart_event_ids', []); // Retrieve saved values (default to empty array)
+        
+        $events_to_retrieve = [];
+        foreach ($selected_categories as $category_id) {
+            // Get the category object
+            $category = get_term($category_id, 'tribe_events_cat');
+    
+            if (!$category || is_wp_error($category)) {
+                continue; // Skip invalid categories
+            }
+    
+            // Get custom field value for the category
+            $events_to_retrieve[] = get_term_meta($category->term_id, 'daysmart_event_ids', true);
+        }
+        // Convert the string into an array using explode()
+        error_log(print_r($events_to_retrieve,true));
+        $events = implode(',', $events_to_retrieve[0]);
+        error_log(print_r($events,true));
+        $daysmart_api_filters = "?filter[start_date__gte]={$today}&filter[start_date__lte]={$six_months_later}&page%5Bsize%5D={$page_size}&filter[event_type_id]={$events}";
+        $daysmart_api_url     = get_option('daysmart_api_base_url').'events'.$daysmart_api_filters;
+        update_option('daysmart_events_last_url', $daysmart_api_url);
+       
         if (!$daysmart_jwt_token) {
-            error_log('API Manager Error: Unabled to find JWT Token');
-            return new WP_Error('jwt_token_missing', __('Unable to find JWT Token', 'the-event-calendar-ext'));
+            $this->fetch_jwt_token();
+            $daysmart_jwt_token   = get_option('daysmart_api_jwt_token');
+            if (!$daysmart_jwt_token) {
+                error_log('API Manager Error: Unabled to find JWT Token');
+                return new WP_Error('jwt_token_missing', __('Unable to find JWT Token', 'the-event-calendar-ext'));
+            }
         }
-    }
-    $args = [
-        'headers' => [
-            'Authorization' => 'Bearer ' . $daysmart_jwt_token,
-            'Content-Type'  => $daysmart_content_type,
-        ],
-        'method'  => 'GET'
-    ];
+        $args = [
+            'headers' => [
+                'Authorization' => 'Bearer ' . $daysmart_jwt_token,
+                'Content-Type'  => $daysmart_content_type,
+            ],
+            'method'  => 'GET'
+        ];
 
-    $response = wp_remote_post($daysmart_api_url, $args);
+        $response = wp_remote_post($daysmart_api_url, $args);
 
-    if (is_wp_error($response)) {
-        error_log('API Manager Error: ' . $response->get_error_message());
-        return false;
-    }
-
-    $body = json_decode(wp_remote_retrieve_body($response), true);
-
-    // If the token is expired, refresh and retry
-    if ($this->is_token_expired($body)) {
-        error_log('Token expired, fetching a new one...');
-        $new_token = $this->fetch_jwt_token();
-        if (is_wp_error($new_token)) {
-            return $new_token; // Return the error if token refresh fails
+        if (is_wp_error($response)) {
+            error_log('API Manager Error: ' . $response->get_error_message());
+            return false;
         }
-        return $this->fetch_content_content(); // Retry after getting a new token
-    }
 
-    // Get the singleton instance
-    $sync_instance = TheEventCalendarExt_Sync::get_instance();
-            
-    // Set event data separately
-    $sync_instance->set_event_data($body['data']);
+        $body = json_decode(wp_remote_retrieve_body($response), true);
 
-    // Now sync events
-    $return = $sync_instance->sync_events();
+        // If the token is expired, refresh and retry
+        if ($this->is_token_expired($body)) {
+            error_log('Token expired, fetching a new one...');
+            $new_token = $this->fetch_jwt_token();
+            if (is_wp_error($new_token)) {
+                return $new_token; // Return the error if token refresh fails
+            }
+            return $this->fetch_content_content(); // Retry after getting a new token
+        }
 
-    if ($return) 
-        update_option('daysmart_events_last_run', gmdate('Y-m-d H:i:s', current_time('timestamp', true)));
+        // Get the singleton instance
+        $sync_instance = TheEventCalendarExt_Sync::get_instance();
+                
+        // Set event data separately
+        $sync_instance->set_event_data($body['data']);
+
+        // Now sync events
+        $return = $sync_instance->sync_events();
+
+        if ($return) 
+            update_option('daysmart_events_last_run', gmdate('Y-m-d H:i:s', current_time('timestamp', true)));
+
     }
 
     // Schedule Token Refresh
