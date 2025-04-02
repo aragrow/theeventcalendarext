@@ -64,7 +64,9 @@ class TheEventCalendarExt_Sync {
         $post_author = 1; //For Admin
         $post_type = 'tribe_events';
         $event_source_id = sanitize_text_field($data['id']);
+       
         $event_data = $data['attributes'];
+        $event_type_id = sanitize_text_field($event_data['event_type_id']);
         $post_title = trim(sanitize_text_field($event_data['title'] ?? $event_data['desc']));
         $post_content = trim(sanitize_textarea_field($event_data['desc'] ?? ''));
         
@@ -93,9 +95,13 @@ class TheEventCalendarExt_Sync {
 
         $mod_u = sanitize_text_field($event_data['mod_u']);
 
+
+        if (empty($event_type_id)) wp_die('No event type IDs found', 404);
+
         return [
             'event_source_id' => $event_source_id,
             'event_duration' => $event_duration,
+            'event_type_id' => $event_type_id,
             'mod_u' => $mod_u,
             'post_id' => $post_id,
             'post_author' => $post_author,
@@ -119,6 +125,14 @@ class TheEventCalendarExt_Sync {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
 
         try {
+
+            $event_category_id = $this->get_category_by_event_type($event['event_type_id']);
+            if (empty($event_category_id)) 
+            {
+                error_log("DAYSMART.APIERROR => {$event['event_source_id']}");
+                wp_die('No event type IDs found', 503);
+            }
+
             if ($event['post_id']) {
                 $post_id = $event['post_id'];
 
@@ -157,6 +171,7 @@ class TheEventCalendarExt_Sync {
             }
     
             if ($post_id) {
+
                 $meta_fields = [
                     '_EventStartDate' => $event['post_start_date'],
                     '_EventEndDate' => $event['post_end_date'],
@@ -177,8 +192,17 @@ class TheEventCalendarExt_Sync {
                 foreach ($meta_fields as $key => $value) {
                     $update_result = update_post_meta($post_id, $key, $value);
                 }
+           
+                $updated = wp_set_post_terms($post_id, $event_category_id, 'tribe_events_cat');
+                if (false === $updated) {
+                    error_log('Database error updating event category: ' . $this->wpdb->last_error);
+                } elseif (0 === $updated) {
+                    error_log('No changes made to event category: ' . $post_id);    
+                } else {
+                    error_log('Successfully updating event category: ' . $event_category_id . ' for post: ' . $post_id);
+                }
             }
-            
+           
             return $post_id;
     
         } catch (Exception $e) {
@@ -188,18 +212,39 @@ class TheEventCalendarExt_Sync {
         }
     }
     
-
-    private function sync_trive_events_event($event, $post_id) {
+    public function get_category_by_event_type($event_type_id) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
-        if(WP_DEBUG) error_log($post_id);
-        global $wpdb;
+        error_log('Event Type Id: ' . $event_type_id);
+         // Retrieve the Event Category associated with the event type
+         
+         $args= [
+            'taxonomy' => 'tribe_events_cat',
+            'hide_empty' => false,
+            'meta_key' => 'daysmart_event_ids'
+        ];
+        $all_terms = get_terms($args);
+        if (is_wp_error($all_terms)) 
+            error_log('Term query failed: ' . $all_terms->get_error_message());
+  
+        foreach ($all_terms as $term) {
+            $meta = maybe_unserialize(get_term_meta($term->term_id, 'daysmart_event_ids', true));
+            if ($meta[0] == $event_type_id) return $term->term_id;
+        }
+
+        return false;
+
+    }
+    private function sync_trive_events_event($data, $post_id) {
+        if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
+        if(WP_DEBUG) error_log("Post ID: {$post_id}");
         
         try {
-            $table = $wpdb->prefix . 'tec_events';
+            $table = $this->wpdb->prefix . 'tec_events';
         
-            $event_id = $this->get_existing_tec_event($post_id);
+            $event = $this->get_existing_tec_event($post_id);
+
             $update_at = current_time('mysql');
-            $string = trim(sanitize_textarea_field($event['desc'] ?? ''));
+            $string = trim(sanitize_textarea_field($data['desc'] ?? ''));
     
             $unique_hash = sha1(
                 $string . 
@@ -212,47 +257,57 @@ class TheEventCalendarExt_Sync {
             // Data array for update/insert
             $record = array(
                 'post_id'        => $post_id,
-                'start_date'     => $event['post_start_date'],
-                'end_date'       => $event['post_end_date'],
-                'timezone'       => $event['local_timezone'],
-                'start_date_utc' => $event['post_start_gmt_date'],
-                'end_date_utc'   => $event['post_end_gmt_date'],
-                'duration'       => $event['event_duration'],
+                'start_date'     => $data['post_start_date'],
+                'end_date'       => $data['post_end_date'],
+                'timezone'       => $data['local_timezone'],
+                'start_date_utc' => $data['post_start_gmt_date'],
+                'end_date_utc'   => $data['post_end_gmt_date'],
+                'duration'       => $data['event_duration'],
                 'updated_at'     => $update_at,
                 'hash'           => $unique_hash,
             );
             error_log(print_r($record,true));
 
-            // Format for each value in the array
             $format = array('%d', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s');
             
-            if ($event_id) {
+            if ($event) {
+                $event_id = $event->event_id;
+                // Format for each value in the array
+
                 // Update record
-                $updated = $wpdb->update(
+                $updated = $this->wpdb->update(
                     $table,
                     $record,
                     ['event_id' => $event_id],
-                    $format,
-                    array('%d')
+                    $format,         // data formats
+                    array('%d')      // where format
                 );
-                error_log($wpdb->last_query);
-                if ($updated === false) {
-                    throw new Exception("Failed to update event: " . $wpdb->last_error);
+
+                // Result handling
+                if (false === $updated) {
+                    error_log('Database error updating event: ' . $this->wpdb->last_error);
+                } elseif (0 === $updated) {
+                    error_log('No changes made to event ID: ' . $event_id);
+                } else {
+                    error_log('Successfully updated event ID: ' . $event_id);
                 }
                 
                 return $post_id;
             } else {
                 // Add event_id to the record for insertion
-                $record['event_id'] = $event_id;
-                $format[] = '%d';
+                // Format for each value in the array
+
         
-                $inserted = $wpdb->insert($table, $record, $format);
+                $inserted = $this->wpdb->insert($table, $record, $format);
                 
-                if ($inserted === false) {
-                    throw new Exception("Failed to insert event: " . $wpdb->last_error);
+                // Result handling
+                if (false === $inserted) {
+                    error_log('Database error inserting event: ' . $this->wpdb->last_error);
+                } else {
+                    error_log('Successfully inserting event ID: ' . $this->wpdb->insert_id);
                 }
-                
-                return $wpdb->insert_id;
+                                
+                return $this->wpdb->insert_id;
             }
         } catch (Exception $e) {
             error_log("Error in " . __CLASS__ . "::" . __FUNCTION__ . ": " . $e->getMessage());
@@ -261,16 +316,16 @@ class TheEventCalendarExt_Sync {
         }
     }    
 
-    private function sync_trive_events_occurrence($event, $post_id, $event_id) {
+    private function sync_trive_events_occurrence($data, $post_id, $event_id) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
-        
+
         try {
             $table_name = $this->wpdb->prefix . "tec_occurrences"; // Ensures compatibility with table prefix
         
             // Step 3: Check if occurrence exists in wp_tec_occurrences
-            $occurrence_id = $this->get_existing_tec_occurrence($post_id, $event_id);
+            $occurrence = $this->get_existing_tec_occurrence($post_id, $event_id);
     
-            $string = trim(sanitize_textarea_field($event['desc'] ?? ''));
+            $string = trim(sanitize_textarea_field($data['desc'] ?? ''));
     
             $unique_hash = sha1(
                 $string . 
@@ -280,11 +335,11 @@ class TheEventCalendarExt_Sync {
                 $event_id
             );
             $record = [
-                'start_date'    => $event['post_start_date'],
-                'start_date_utc'=> $event['post_start_gmt_date'], // Assuming UTC is the same
-                'end_date'      => $event['post_end_date'],
-                'end_date_utc'  => $event['post_end_gmt_date'],
-                'duration'      => $event['event_duration'],
+                'start_date'    => $data['post_start_date'],
+                'start_date_utc'=> $data['post_start_gmt_date'], // Assuming UTC is the same
+                'end_date'      => $data['post_end_date'],
+                'end_date_utc'  => $data['post_end_gmt_date'],
+                'duration'      => $data['event_duration'],
                 'updated_at'    => current_time('mysql'),
                 'hash'          => $unique_hash
             ];
@@ -292,8 +347,10 @@ class TheEventCalendarExt_Sync {
             // Format for each value in the array
             $format = array('%s', '%s', '%s', '%s', '%d', '%s', '%s');
             
-            if ($occurrence_id) {
-                $result = $this->wpdb->update(
+            if ($occurrence) {
+                $occurrence_id = $occurrence->occurrence_id;
+
+                $updated = $this->wpdb->update(
                     $table_name, 
                     $record, 
                     ['occurrence_id' => $occurrence_id],
@@ -301,20 +358,31 @@ class TheEventCalendarExt_Sync {
                     array('%d')
                 ); // Update existing entry
                 
-                if ($result === false) {
-                    throw new Exception("Failed to update occurrence: " . $this->wpdb->last_error);
+                // Result handling
+                if (false === $updated) {
+                    error_log('Database error updating occurence: ' . $this->wpdb->last_error);
+                } elseif (0 === $updated) {
+                    error_log('No changes made to occurence ID: ' . $occurrence_id);
+                } else {
+                    error_log('Successfully updated occurence ID: ' . $occurrence_id);
                 }
+
             } else {
+
                 $record['post_id'] = $post_id;
                 $record['event_id'] = $event_id;
                 $format[] = '%d';
                 $format[] = '%d';
     
-                $result = $this->wpdb->insert($table_name, $record, $format); // Insert new event data
+                $inserted = $this->wpdb->insert($table_name, $record, $format); // Insert new event data
                 
-                if ($result === false) {
-                    throw new Exception("Failed to insert occurrence: " . $this->wpdb->last_error);
+                // Result handling
+                if (false === $inserted) {
+                    error_log('Database error inserting occurrence: ' . $this->wpdb->last_error);
+                } else {
+                    error_log('Successfully inserting occurrence ID: ' . $this->wpdb->insert_id);
                 }
+                
                 $occurrence_id = $this->wpdb->insert_id;
             }
             
@@ -361,14 +429,18 @@ class TheEventCalendarExt_Sync {
 
     private function get_existing_tec_event( $post_id ) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
+
         global $wpdb;
         $table = $wpdb->prefix . 'tec_events';
         $post_id = sanitize_text_field( $post_id );
         
-        return $wpdb->get_row( $wpdb->prepare(
-            "SELECT event_id FROM {$table} WHERE post_id = %s",
+        $event_id = $wpdb->get_row( $wpdb->prepare(
+            "SELECT event_id FROM {$table} WHERE post_id = %d",
             $post_id
         ) );
+
+        return $event_id;
+
     }
     
     private function get_existing_tec_occurrence( $post_id, $event_id ) {

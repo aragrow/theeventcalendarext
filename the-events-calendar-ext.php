@@ -2,7 +2,7 @@
 /**
  * Plugin Name: The Events Calendar Extender
  * Description: Extends The Events Calendar. Controls the custom styles, and manage the api endpoint to retrieve Events from DaySmart.
- * Version: 1.1.1
+ * Version: 1.1.2
  * Requires Calendar Version: 6.10.2
  * Requires WP at least: 6.5
  * Requires PHP: 7.4
@@ -27,4 +27,4 @@ defined( 'THE_EVENT_CALENDAR_EXT_PARENT_MENU' ) or define( 'THE_EVENT_CALENDAR_E
 
 require_once THE_EVENT_CALENDAR_EXT_CLASSES . 'the-event-calendar.php';
 require_once THE_EVENT_CALENDAR_EXT_CLASSES . 'api-manager.php';
-require_once THE_EVENT_CALENDAR_EXT_CLASSES . 'sync-the-calendar.php';
+require_once THE_EVENT_CALENDAR_EXT_CLASSES . 'sync-the-event-calendar.php';

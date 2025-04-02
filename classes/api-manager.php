@@ -202,11 +202,11 @@ class TheEventCalendarExt_APIManager {
             $events_to_retrieve[] = get_term_meta($category->term_id, 'daysmart_event_ids', true);
         }
         // Convert the string into an array using explode()
-        error_log(print_r($events_to_retrieve,true));
+        //error_log(print_r($events_to_retrieve,true));
         $events = implode(',', $events_to_retrieve[0]);
-        error_log(print_r($events,true));
-        $daysmart_api_filters = "?filter[start_date__gte]={$today}&filter[start_date__lte]={$six_months_later}&page%5Bsize%5D={$page_size}&filter[event_type_id]={$events}";
-        $daysmart_api_url     = get_option('daysmart_api_base_url').'events'.$daysmart_api_filters;
+        //error_log(print_r($events,true));
+        $daysmart_api_filters = "?filter[start_date__gte]={$today}&filter[start_date__lte]={$six_months_later}&filter[event_type_id]={$events}";
+        $daysmart_api_url = get_option('daysmart_api_base_url').'events'.$daysmart_api_filters;
         update_option('daysmart_events_last_url', $daysmart_api_url);
        
         if (!$daysmart_jwt_token) {

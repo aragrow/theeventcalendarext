@@ -116,11 +116,15 @@ class TheEventCalendarExt {
     }
 
     public function manage_edit_tribe_events_cat_columns_callback($columns) {
-        $columns['davsmart_event'] = 'DaySmart Event'; // Column header
+        if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
+
+        $columns['davsmart_event'] = 'SmartDay Event'; // Column header
         return $columns;
     }
 
     public function manage_tribe_events_cat_custom_column_callback($content, $column_name, $term_id) {
+        if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
+
         if ($column_name === 'davsmart_event') {
             $custom_value = get_term_meta($term_id, 'daysmart_event_ids', true);
             if (!empty($custom_value)) {
@@ -140,6 +144,8 @@ class TheEventCalendarExt {
 
     // 3. Make the column sortable (optional)
     public function manage_edit_tribe_events_cat_sortable_columns_callback($columns) {
+        if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
+
         $columns['davsmart_event'] = 'davsmart_event';
         return $columns;
     }
