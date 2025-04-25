@@ -49,12 +49,12 @@ class TheEventCalendarExt_Sync {
             }
             // Commit the transaction if everything is successful
             $wpdb->query("COMMIT");
-            error_log("Transactions committed successfully!");
+            if(WP_DEBUG) error_log("Transactions committed successfully!");
             return true;
         } catch (Exception $e) {
             // Rollback the transaction in case of an error
             $wpdb->query("ROLLBACK");
-            error_log("Transaction failed: " . $e->getMessage());
+            error_log("TheEventCalendarExt_Sync - Transaction failed: " . $e->getMessage());
             return false;
         }
     }
@@ -148,7 +148,7 @@ class TheEventCalendarExt_Sync {
                 if (is_wp_error($update_result)) {
                     throw new Exception("Failed to update event: " . $update_result->get_error_message());
                 }
-                error_log("Update existing event ({$post_id})");
+                if(WP_DEBUG) error_log("Update existing event ({$post_id})");
             } else {
                 // Insert new event
                 $post_id = wp_insert_post([
@@ -167,7 +167,7 @@ class TheEventCalendarExt_Sync {
                 if (is_wp_error($post_id)) {
                     throw new Exception("Failed to insert event: " . $post_id->get_error_message());
                 }
-                error_log("Inserted new event ({$post_id})");
+                if(WP_DEBUG) error_log("Inserted new event ({$post_id})");
             }
     
             if ($post_id) {
@@ -195,11 +195,11 @@ class TheEventCalendarExt_Sync {
            
                 $updated = wp_set_post_terms($post_id, $event_category_id, 'tribe_events_cat');
                 if (false === $updated) {
-                    error_log('Database error updating event category: ' . $this->wpdb->last_error);
+                    error_log('TheEventCalendarExt_Sync - Database error updating event category: ' . $this->wpdb->last_error);
                 } elseif (0 === $updated) {
-                    error_log('No changes made to event category: ' . $post_id);    
+                    if(WP_DEBUG) error_log('No changes made to event category: ' . $post_id);    
                 } else {
-                    error_log('Successfully updating event category: ' . $event_category_id . ' for post: ' . $post_id);
+                    if(WP_DEBUG) error_log('Successfully updating event category: ' . $event_category_id . ' for post: ' . $post_id);
                 }
             }
            
@@ -266,7 +266,7 @@ class TheEventCalendarExt_Sync {
                 'updated_at'     => $update_at,
                 'hash'           => $unique_hash,
             );
-            error_log(print_r($record,true));
+            if(WP_DEBUG) error_log(print_r($record,true));
 
             $format = array('%d', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s');
             
@@ -285,11 +285,11 @@ class TheEventCalendarExt_Sync {
 
                 // Result handling
                 if (false === $updated) {
-                    error_log('Database error updating event: ' . $this->wpdb->last_error);
+                    error_log('TheEventCalendarExt_Sync - Database error updating event: ' . $this->wpdb->last_error);
                 } elseif (0 === $updated) {
-                    error_log('No changes made to event ID: ' . $event_id);
+                    if(WP_DEBUG) error_log('No changes made to event ID: ' . $event_id);
                 } else {
-                    error_log('Successfully updated event ID: ' . $event_id);
+                    if(WP_DEBUG) error_log('Successfully updated event ID: ' . $event_id);
                 }
                 
                 return $post_id;
@@ -302,15 +302,15 @@ class TheEventCalendarExt_Sync {
                 
                 // Result handling
                 if (false === $inserted) {
-                    error_log('Database error inserting event: ' . $this->wpdb->last_error);
+                    error_log('TheEventCalendarExt_Sync - Database error inserting event: ' . $this->wpdb->last_error);
                 } else {
-                    error_log('Successfully inserting event ID: ' . $this->wpdb->insert_id);
+                    if(WP_DEBUG) error_log('Successfully inserting event ID: ' . $this->wpdb->insert_id);
                 }
                                 
                 return $this->wpdb->insert_id;
             }
         } catch (Exception $e) {
-            error_log("Error in " . __CLASS__ . "::" . __FUNCTION__ . ": " . $e->getMessage());
+            error_log("TheEventCalendarExt_Sync - Error in " . __CLASS__ . "::" . __FUNCTION__ . ": " . $e->getMessage());
             // You might want to handle the error differently, e.g., return false or re-throw the exception
             return false;
         }
@@ -360,11 +360,11 @@ class TheEventCalendarExt_Sync {
                 
                 // Result handling
                 if (false === $updated) {
-                    error_log('Database error updating occurence: ' . $this->wpdb->last_error);
+                    error_log('TheEventCalendarExt_Sync - Database error updating occurence: ' . $this->wpdb->last_error);
                 } elseif (0 === $updated) {
-                    error_log('No changes made to occurence ID: ' . $occurrence_id);
+                    if(WP_DEBUG) error_log('No changes made to occurence ID: ' . $occurrence_id);
                 } else {
-                    error_log('Successfully updated occurence ID: ' . $occurrence_id);
+                    if(WP_DEBUG) error_log('Successfully updated occurence ID: ' . $occurrence_id);
                 }
 
             } else {
@@ -378,9 +378,9 @@ class TheEventCalendarExt_Sync {
                 
                 // Result handling
                 if (false === $inserted) {
-                    error_log('Database error inserting occurrence: ' . $this->wpdb->last_error);
+                    error_log('TheEventCalendarExt_Sync - Database error inserting occurrence: ' . $this->wpdb->last_error);
                 } else {
-                    error_log('Successfully inserting occurrence ID: ' . $this->wpdb->insert_id);
+                    if(WP_DEBUG) error_log('Successfully inserting occurrence ID: ' . $this->wpdb->insert_id);
                 }
                 
                 $occurrence_id = $this->wpdb->insert_id;
@@ -388,7 +388,7 @@ class TheEventCalendarExt_Sync {
             
             return $occurrence_id;
         } catch (Exception $e) {
-            error_log("Error in " . __CLASS__ . "::" . __FUNCTION__ . ": " . $e->getMessage());
+            error_log("TheEventCalendarExt_Sync - Error in " . __CLASS__ . "::" . __FUNCTION__ . ": " . $e->getMessage());
             // You might want to handle the error differently, e.g., return false or re-throw the exception
             return false;
         }

@@ -141,14 +141,14 @@ class TheEventCalendarExt_APIManager {
     // Fetch JWT Token from API
     public function fetch_jwt_token() {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
-        error_log('Token expired, fetching a new one...');
+        if(WP_DEBUG) error_log('Token expired, fetching a new one...');
         $daysmart_api_url     = get_option('daysmart_api_base_url').'auth/token';
         $client_id   = get_option('daysmart_api_client_id');
         $client_secret = get_option('daysmart_api_client_secret');
         $grant_type  = get_option('daysmart_api_grant_type');
 
         if (!$daysmart_api_url || !$client_id || !$client_secret || !$grant_type) {
-            error_log('Information missing on request.  Unable to execute');
+            error_log('TheEventCalendarExt_APIManager - Information missing on request.  Unable to execute');
             return false;
         }
 
@@ -167,19 +167,19 @@ class TheEventCalendarExt_APIManager {
         $response = wp_remote_post($daysmart_api_url, $args);
 
         if (is_wp_error($response)) {
-            error_log('API Manager Error: ' . $response->get_error_message());
+            error_log('TheEventCalendarExt_APIManager - API Manager Error: ' . $response->get_error_message());
             return false;
         }
 
         $body = json_decode(wp_remote_retrieve_body($response), true);
 
         if (!empty($body['access_token'])) {
-            error_log('JWT Token fetched.');
+            if(WP_DEBUG) error_log('JWT Token fetched.');
             $sanitized_jwt = sanitize_text_field($body['access_token']);
             update_option('daysmart_api_jwt_token', $sanitized_jwt);
             return $body['access_token'];
         } 
-        error_log('JWT Token Not fetched.');
+        error_log('TheEventCalendarExt_APIManager - JWT Token Not fetched.');
         error_log(print_r($body,true));
         return false;
     }
@@ -187,7 +187,7 @@ class TheEventCalendarExt_APIManager {
     // Fetch Content from API
     public function fetch_content_content($category_id = null) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
-        error_log( 'Received parameter Category: ' . $category_id ); // For debugging
+        if(WP_DEBUG) error_log( 'Received parameter Category: ' . $category_id ); // For debugging
         $today = date('Y-m-d');
         $six_months_later = date('Y-m-d', strtotime('+6 months'));
         $page_size = 100; // Increase page size to get more events at once
@@ -214,7 +214,7 @@ class TheEventCalendarExt_APIManager {
             $term = get_term($category_id, 'tribe_events_cat');
             $events = get_term_meta($term->term_id, 'daysmart_event_ids', true)[0];
         }
-        error_log( 'Day Smart Events: ' . print_r($events, true)  ); // For debugging
+        if(WP_DEBUG) error_log( 'Day Smart Events: ' . print_r($events, true)  ); // For debugging
         // Convert the string into an array using explode()
         //error_log(print_r($events_to_retrieve,true));
 
@@ -227,7 +227,7 @@ class TheEventCalendarExt_APIManager {
             $this->fetch_jwt_token();
             $daysmart_jwt_token   = get_option('daysmart_api_jwt_token');
             if (!$daysmart_jwt_token) {
-                error_log('API Manager Error: Unabled to find JWT Token');
+                error_log('TheEventCalendarExt_APIManager - API Manager Error: Unabled to find JWT Token');
                 return new WP_Error('jwt_token_missing', __('Unable to find JWT Token', 'the-event-calendar-ext'));
             }
         }
@@ -242,7 +242,7 @@ class TheEventCalendarExt_APIManager {
         $response = wp_remote_post($daysmart_api_url, $args);
 
         if (is_wp_error($response)) {
-            error_log('API Manager Error: ' . $response->get_error_message());
+            error_log('TheEventCalendarExt_APIManagerAPI Manager Error: ' . $response->get_error_message());
             return false;
         }
 
@@ -252,7 +252,7 @@ class TheEventCalendarExt_APIManager {
         if ($is_expired) {
             $new_token = $this->fetch_jwt_token();
             if (is_wp_error($new_token)) {
-                error_log('####ERROR: API Manager Error: ' . $new_token); // Return the error if token refresh fails
+                error_log('####ERROR: TheEventCalendarExt_APIManagerAPI Manager Error: ' . $new_token); // Return the error if token refresh fails
 
             } 
             exit;
@@ -309,7 +309,7 @@ class TheEventCalendarExt_APIManager {
             if(isset($response_body['errors'][0]['status']) && $response_body['errors'][0]['status'] == 401) {
                 return true; // Return the error if token refresh fails
             }  else {
-                error_log('#####ERROR - Process Stopped: API Manager Error: ' . print_r($response_body['errors'],true));
+                error_log('#####ERROR - TheEventCalendarExt_APIManager - Process Stopped: API Manager Error: ' . print_r($response_body['errors'],true));
                 exit;
             }
         }
