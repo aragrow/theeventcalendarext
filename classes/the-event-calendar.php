@@ -55,7 +55,7 @@ class TheEventCalendarExt {
     public function tribe_events_cat_add_form_fields_callback($taxonomy) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
         if ($taxonomy != 'tribe_events_cat') return;
-
+        wp_nonce_field('tribe_events_cat_daysmart_update', 'daysmart_term_nonce'); // Add nonce field
         ?>
         <div class="category-checklist">
             <label for="daysmart_event_ids">SmartDay Events to Include</label>
@@ -76,6 +76,7 @@ class TheEventCalendarExt {
         $selected_events= get_term_meta($term->term_id, 'daysmart_event_ids', true);
         $selected_events = is_array($selected_events) ? $selected_events : []; // Ensure it's an array
 
+        wp_nonce_field('tribe_events_cat_daysmart_update', 'daysmart_term_nonce'); // Add nonce field
         ?>
         <tr class="form-field">
             <th scope="row">
@@ -99,6 +100,14 @@ class TheEventCalendarExt {
     // Save selected categories when creating a new event category (optional)
     public function create_tribe_events_cat_callback($term_id) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
+
+         // Verify nonce
+        if ( ! isset( $_POST['daysmart_term_nonce'] ) || ! wp_verify_nonce( $_POST['daysmart_term_nonce'], 'tribe_events_cat_daysmart_update' ) ) {
+            // Nonce is invalid, do not process the update
+            if(WP_DEBUG) error_log('DaySmart term meta update nonce verification failed (create).');
+            return;
+        }
+
         if (isset($_POST['daysmart_event_ids'])) {
             $selected_categories = array_map('intval', $_POST['daysmart_event_ids']); // Sanitize input
             update_term_meta($term_id, 'daysmart_event_ids', $selected_categories);
@@ -107,6 +116,14 @@ class TheEventCalendarExt {
 
     public function edited_tribe_events_cat_callback($term_id) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
+
+        // Verify nonce
+        if ( ! isset( $_POST['daysmart_term_nonce'] ) || ! wp_verify_nonce( $_POST['daysmart_term_nonce'], 'tribe_events_cat_daysmart_update' ) ) {
+            // Nonce is invalid, do not process the update
+            if(WP_DEBUG) error_log('DaySmart term meta update nonce verification failed (edit).');
+            return;
+        }
+
         if (!isset($_POST['daysmart_event_ids'])) 
             delete_term_meta($term_id, 'daysmart_event_ids'); // Remove meta if no categories are selected
         else {

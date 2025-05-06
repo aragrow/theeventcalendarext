@@ -52,6 +52,7 @@ class TheEventCalendarExt_APIManager {
                 <?php
                 settings_fields($this->option_group);
                 do_settings_sections(THE_EVENT_CALENDAR_EXT_PARENT_MENU);
+                wp_nonce_field('daysmart_api_settings_update', 'daysmart_api_nonce'); // Add nonce field
                 submit_button();
                 ?>
             </form>
@@ -116,6 +117,13 @@ class TheEventCalendarExt_APIManager {
 
     public function update_option_daysmart_event_ids_callback($old_value, $new_value, $option) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);  // $param will be 1
+
+        // Verify nonce
+        if ( ! isset( $_POST['daysmart_api_nonce'] ) || ! wp_verify_nonce( $_POST['daysmart_api_nonce'], 'daysmart_api_settings_update' ) ) {
+            // Nonce is invalid, do not process the update
+            if(WP_DEBUG) error_log('DaySmart API settings update nonce verification failed.');
+            return $old_value; // Return the old value to prevent unauthorized changes
+        }
 
         if (isset($_POST['daysmart_event_ids']) && is_array($_POST['daysmart_event_ids'])) {
                 // Sanitize input to ensure only integers are stored
@@ -186,8 +194,10 @@ class TheEventCalendarExt_APIManager {
 
     // Fetch Content from API
     public function fetch_content_content($category_id = null) {
+        error_log('##### Start: DaySmart API - Fetching content...');
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
         if(WP_DEBUG) error_log( 'Received parameter Category: ' . $category_id ); // For debugging
+
         $today = date('Y-m-d');
         $six_months_later = date('Y-m-d', strtotime('+6 months'));
         $page_size = 100; // Increase page size to get more events at once
@@ -241,22 +251,55 @@ class TheEventCalendarExt_APIManager {
 
         $response = wp_remote_post($daysmart_api_url, $args);
 
-        if (is_wp_error($response)) {
-            error_log('TheEventCalendarExt_APIManagerAPI Manager Error: ' . $response->get_error_message());
-            return false;
+        if (is_wp_error($response)) {   
+            error_log('TheEventCalendarExt_APIManager API Manager Error fetching content: ' . $response->get_error_message());
+            return new WP_Error('wp_remote_error', __('Error fetching data from DaySmart API.', 'the-event-calendar-ext'), ['details' => $response->get_error_message()]); // Return WP_Error
         }
 
+        $http_status = wp_remote_retrieve_response_code($response);
         $body = json_decode(wp_remote_retrieve_body($response), true);
+
+         // Check for non-successful HTTP status codes first
+        if ($http_status < 200 || $http_status >= 300) {
+            // Log the full response for debugging non-success status codes
+            error_log('#####DAYSMART API Non-Success HTTP Status: ' . $http_status . ' - Response Body: ' . print_r($body, true));
+            if ($http_status === 401) {
+                // It's a 401, definitely try to refresh the token
+                if(WP_DEBUG) error_log('HTTP 401 received. Attempting token refresh...');
+                $new_token_result = $this->fetch_jwt_token();
+                if (is_wp_error($new_token_result)) {
+                    error_log('####ERROR: TheEventCalendarExt_APIManager API Manager Error during token refresh after 401: ' . $new_token_result->get_error_message());
+                    return $new_token_result; // Return the error if token refresh fails
+                }
+                // Token refreshed, now try fetching content again (optional: add a retry mechanism)
+                // For now, the scheduled task will just run again later with the new token.
+                return new WP_Error('token_refreshed_retry_needed', __('DaySmart API token refreshed. The content sync will retry on the next scheduled interval.', 'the-event-calendar-ext'));
+            } else {
+                // Handle other non-401 errors
+                error_log('#####ERROR - TheEventCalendarExt_APIManager - API returned non-401 HTTP status: ' . $http_status);
+                return new WP_Error('api_http_error', __('DaySmart API returned an HTTP error.', 'the-event-calendar-ext'), ['status' => $http_status, 'body' => $body]);
+            }
+        }
+    
+        // Check for token expiration
         $is_expired = $this->is_token_expired($body);
         // If the token is expired, refresh and retry
         if ($is_expired) {
-            $new_token = $this->fetch_jwt_token();
-            if (is_wp_error($new_token)) {
-                error_log('####ERROR: TheEventCalendarExt_APIManagerAPI Manager Error: ' . $new_token); // Return the error if token refresh fails
-
-            } 
-            exit;
+            if(WP_DEBUG) error_log('DaySmart API: Body indicates token is expired. Attempting token refresh...');
+            $new_token_result = $this->fetch_jwt_token();
+            if (is_wp_error($new_token_result)) {
+                error_log('####ERROR: TheEventCalendarExt_APIManager API Manager Error during token refresh after body expiration indicator: ' . $new_token_result->get_error_message());
+                return $new_token_result; // Return the error if token refresh fails
+            }
+            // Token refreshed, sync will retry later
+            return new WP_Error('token_refreshed_retry_needed', __('DaySmart API token refreshed. The content sync will retry on the next scheduled interval.', 'the-event-calendar-ext'));
         } 
+
+        // If no errors and no token expiration indicated...
+        if (!isset($body['data']) || !is_array($body['data'])) {
+            error_log('#####DAYSMART API ERROR: Unexpected response format. No "data" array found. Response: ' . print_r($body, true));
+            return new WP_Error('unexpected_response_format', __('DaySmart API returned an unexpected response format.', 'the-event-calendar-ext'), ['body' => $body]);
+        }
 
         // Get the singleton instance
         $sync_instance = TheEventCalendarExt_Sync::get_instance();
@@ -267,6 +310,7 @@ class TheEventCalendarExt_APIManager {
         // Now sync events
         $return = $sync_instance->sync_events();
 
+        error_log('##### End: DaySmart API - Ended');
         if ($return) 
             update_option('daysmart_events_last_run', gmdate('Y-m-d H:i:s', current_time('timestamp', true)));
 
@@ -304,20 +348,38 @@ class TheEventCalendarExt_APIManager {
     private function is_token_expired($response_body) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
 
+        // Check for a common API error structure indicating issues
         if (isset($response_body['errors'])) {
+            // Log the full error details securely
+            error_log('#####DAYSMART API ERROR: ' . print_r($response_body['errors'], true));
 
             if(isset($response_body['errors'][0]['status']) && $response_body['errors'][0]['status'] == 401) {
-                return true; // Return the error if token refresh fails
-            }  else {
-                error_log('#####ERROR - TheEventCalendarExt_APIManager - Process Stopped: API Manager Error: ' . print_r($response_body['errors'],true));
-                exit;
+                if(WP_DEBUG) error_log('DaySmart API: Token expired (401 status).');
+                return true; // Token expired
+            } else {
+                // Handle other types of API errors
+                error_log('#####ERROR - TheEventCalendarExt_APIManager - API returned an error other than 401.');
+                // Depending on the error, you might want to stop processing or try again
+                // For now, we'll just log and assume it's not a token expiration requiring refresh.
+                // If these errors should stop the sync, you'd return true here or handle it in fetch_content_content.
+                return false; // It's an error, but not necessarily a token expiration
             }
+        } elseif (isset($response_body['error']) && !empty($response_body['error'])) {
+            // Check for another common API error structure
+            error_log('#####DAYSMART API ERROR (Alternative Structure): ' . print_r($response_body, true));
+            // If it's a recognized "invalid_token" or similar error, return true
+            if (strpos(strtolower($response_body['error']), 'invalid_token') !== false) {
+                if(WP_DEBUG) error_log('DaySmart API: Invalid token error.');
+                return true; // Token is invalid
+            }
+            // Handle other errors as needed
+            return false; // It's an error, but not necessarily a token expiration
         }
 
+        // If no explicit error structure indicating token expiration is found
         return false;
+
     }
-
-
 }
 
 // Initialize Plugin

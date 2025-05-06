@@ -17,11 +17,13 @@ class TheEventCalendarExt_Sync {
 
     private $wpdb;
     private $events_data;
+    private $mapping_table_name; // Add a property for the table name
 
     private function __construct() {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
         global $wpdb;
         $this->wpdb = $wpdb;
+        $this->mapping_table_name = $wpdb->prefix . 'cst_daysmart_map'; // Initialize the table name
     }
 
     // New method to set event data
@@ -31,40 +33,109 @@ class TheEventCalendarExt_Sync {
        // error_log(print_r($this->events_data,true));
     }
 
+    // The sync_events function remains the same in terms of calling get/set,
+    // but now they have enhanced error handling and sanitization internally.
+    // The exception handling in sync_events will catch errors from set_synced_event_mapping.
     public function sync_events() {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
 
         global $wpdb;
+        $current_daysmart_ids_and_posts = []; // To store DaySmart ID => WP Post ID for the current API fetch
+
         try {
             // Start a transaction
             $wpdb->query("START TRANSACTION");
-            foreach ($this->events_data as $data) {
-                // Check if event exists by title
 
+            // Step 1: Get previous mapping before processing new data
+            $previous_mapping = $this->get_synced_event_mapping();
+
+            // Step 2: Process the newly fetched data and build the current mapping
+            foreach ($this->events_data as $data) {
                 $event = $this->parse_event_data($data);
                 $post_id = $this->sync_tribe_event_post($event);
                 $event_id = $this->sync_trive_events_event($event, $post_id);
                 $occurrence_id = $this->sync_trive_events_occurrence($event, $post_id, $event_id);
-        
+
+                // Add the DaySmart ID and WP Post ID to our current list
+                if ($post_id) {
+                    $current_daysmart_ids_and_posts[$event['event_source_id']] = $post_id;
+                } else {
+                    // Log if a post creation/update failed - this event won't be mapped
+                    error_log('TheEventCalendarExt_Sync - Failed to get valid WP Post ID for DaySmart event: ' . $event['event_source_id']);
+                }
             }
-            // Commit the transaction if everything is successful
+
+            // Step 3: Identify events to delete
+            $previous_daysmart_ids = array_keys($previous_mapping);
+            $current_daysmart_ids = array_keys($current_daysmart_ids_and_posts); // Get keys from the newly synced data
+
+            $deleted_daysmart_ids = array_diff($previous_daysmart_ids, $current_daysmart_ids); // Compare keys only
+
+            /* CODE TO DELETE OUTDATED EVENTS
+             ****************** THIS CODE HAS NOT BEEN TESTED YET DUE TO LACK OF TEST DATA ******************  
+             ****************** ALSO, THERE MAY BE AN ISSUE WHEN EXECUTING BECAUSE IT DOES NOT ACCOUT FOR THE
+             ******************  THREE JOBS EXECUTED, EACH FOR A DIFFERENT EVENT TYPE.
+             ******************  THE IDEA IS TO WAIT UNTIL DAYSMART HELP DESK GET BACK TO US ON HOW TO MAKE ONE REQUEST
+             ******************  FOR ALL EVENT TYPES. 
+             
+            // Step 4: Delete outdated events from WordPress
+            if (!empty($deleted_daysmart_ids)) {
+                if(WP_DEBUG) error_log('Found DaySmart events to delete: ' . implode(', ', $deleted_daysmart_ids));
+                foreach ($deleted_daysmart_ids as $deleted_daysmart_id) {
+                    $post_to_delete_id = $previous_mapping[$deleted_daysmart_id]; // Get WP Post ID from the previous mapping
+                    if ($post_to_delete_id) {
+                        if(WP_DEBUG) error_log('Deleting WordPress post ID: ' . $post_to_delete_id);
+                        // Use wp_delete_post to trash the post
+                        $delete_result = wp_delete_post($post_to_delete_id, false); // Set to true for permanent delete
+
+                        if (false === $delete_result) {
+                            error_log('TheEventCalendarExt_Sync - Failed to delete post ID: ' . $post_to_delete_id . ' (might already be deleted)');
+                        } else {
+                            if(WP_DEBUG) error_log('Successfully deleted post ID: ' . $post_to_delete_id);
+                        }
+                    } else {
+                        // This shouldn't happen if get_synced_event_mapping works correctly,
+                        // but it's a safeguard.
+                        error_log('TheEventCalendarExt_Sync - Could not find WP Post ID for DaySmart ID in previous mapping when attempting deletion: ' . $deleted_daysmart_id);
+                    }
+                }
+            }
+
+            // Step 5: Update the mapping in the database with the current list of synced events
+            $this->set_synced_event_mapping($current_daysmart_ids_and_posts); // Pass the new mapping
+
+            END OF DELETION CODE
+            */
+
+            // Step 6: Commit the transaction if everything is successful
             $wpdb->query("COMMIT");
             if(WP_DEBUG) error_log("Transactions committed successfully!");
             return true;
+
         } catch (Exception $e) {
             // Rollback the transaction in case of an error
             $wpdb->query("ROLLBACK");
             error_log("TheEventCalendarExt_Sync - Transaction failed: " . $e->getMessage());
-            return false;
+            return false; // Indicate sync failure
+        } catch (WP_Error $e) {
+            // Catch WP_Error from internal functions like wp_delete_post
+            $wpdb->query("ROLLBACK");
+            error_log("TheEventCalendarExt_Sync - WP_Error during sync: " . $e->get_error_message());
+            return false; // Indicate sync failure
         }
     }
 
+
+
     private function parse_event_data($data) {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
-        $post_author = 1; //For Admin
+        
+        $admin_user = get_user_by('id', 1); // Get user by ID 1 (common admin ID)
+        $post_author = $admin_user ? $admin_user->ID : 0; // Use 0 if user 1 doesn't exist
+        
         $post_type = 'tribe_events';
         $event_source_id = sanitize_text_field($data['id']);
-       
+    
         $event_data = $data['attributes'];
         $event_type_id = sanitize_text_field($event_data['event_type_id']);
         $post_title = trim(sanitize_text_field($event_data['title'] ?? $event_data['desc']));
@@ -96,7 +167,10 @@ class TheEventCalendarExt_Sync {
         $mod_u = sanitize_text_field($event_data['mod_u']);
 
 
-        if (empty($event_type_id)) wp_die('No event type IDs found', 404);
+        if (empty($event_type_id)) {
+            error_log('TheEventCalendarExt_Sync - Critical Error: No event type IDs found for event ID: ' . $event_source_id); // Log technical detail securely
+            wp_die(__('An unexpected error occurred while syncing events. Please contact the site administrator.', 'the-event-calendar-ext'), __('Sync Error', 'the-event-calendar-ext'), array('response' => 500)); // Provide generic message to user 
+        }
 
         return [
             'event_source_id' => $event_source_id,
@@ -192,7 +266,7 @@ class TheEventCalendarExt_Sync {
                 foreach ($meta_fields as $key => $value) {
                     $update_result = update_post_meta($post_id, $key, $value);
                 }
-           
+        
                 $updated = wp_set_post_terms($post_id, $event_category_id, 'tribe_events_cat');
                 if (false === $updated) {
                     error_log('TheEventCalendarExt_Sync - Database error updating event category: ' . $this->wpdb->last_error);
@@ -202,7 +276,7 @@ class TheEventCalendarExt_Sync {
                     if(WP_DEBUG) error_log('Successfully updating event category: ' . $event_category_id . ' for post: ' . $post_id);
                 }
             }
-           
+        
             return $post_id;
     
         } catch (Exception $e) {
@@ -216,8 +290,8 @@ class TheEventCalendarExt_Sync {
         if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
         error_log('Event Type Id: ' . $event_type_id);
          // Retrieve the Event Category associated with the event type
-         
-         $args= [
+        
+        $args= [
             'taxonomy' => 'tribe_events_cat',
             'hide_empty' => false,
             'meta_key' => 'daysmart_event_ids'
@@ -225,7 +299,7 @@ class TheEventCalendarExt_Sync {
         $all_terms = get_terms($args);
         if (is_wp_error($all_terms)) 
             error_log('Term query failed: ' . $all_terms->get_error_message());
-  
+
         foreach ($all_terms as $term) {
             $meta = maybe_unserialize(get_term_meta($term->term_id, 'daysmart_event_ids', true));
             if ($meta[0] == $event_type_id) return $term->term_id;
@@ -454,6 +528,133 @@ class TheEventCalendarExt_Sync {
             "SELECT occurrence_id FROM {$table} WHERE post_id = %d AND event_id = %d",
             $post_id, $event_id
         ));
+    }
+
+    /**
+     * Retrieves the mapping of DaySmart Event IDs to WordPress Post IDs from the database.
+     * Includes basic error handling for database queries.
+     *
+     * @return array An associative array where keys are DaySmart Event IDs and values are WordPress Post IDs.
+     */
+    private function get_synced_event_mapping() {
+        if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
+        $mapping = [];
+
+        // Prepare the SQL query. No user input directly in this simple SELECT.
+        $sql = "SELECT daysmart_event_id, wp_post_id FROM {$this->mapping_table_name}";
+
+        // Execute the query
+        $results = $this->wpdb->get_results($sql, ARRAY_A);
+
+        // Check for database errors during the query
+        if (false === $results && ! empty($this->wpdb->last_error)) {
+            error_log('TheEventCalendarExt_Sync - Database error retrieving mapping entries: ' . $this->wpdb->last_error);
+            // In a real application, you might throw an exception or return a WP_Error here
+            // depending on how critical it is for the sync to fail. For this case, returning
+            // an empty mapping might allow the sync to continue (without deletions),
+            // which might be acceptable.
+            return [];
+        }
+
+        if ($results) {
+            foreach ($results as $row) {
+                // Sanitize/validate data retrieved from the database
+                $daysmart_id = sanitize_text_field($row['daysmart_event_id']);
+                $daysmart_type = sanitize_text_field($row['daysmart_event_type']);
+                $wp_post_id = (int) $row['wp_post_id']; // Ensure it's an integer
+
+                // Add to mapping if IDs are valid
+                if (!empty($daysmart_id) && $wp_post_id > 0) {
+                    $mapping[$daysmart_id] = [
+                        'type' => $daysmart_type,
+                        'post_id' => $wp_post_id];
+                } else {
+                    // Log if we find unexpected data in the mapping table
+                    error_log('TheEventCalendarExt_Sync - Found invalid mapping entry in DB: ' . print_r($row, true));
+                }
+            }
+        }
+
+        if(WP_DEBUG) error_log('Retrieved mapping entries: ' . count($mapping));
+        return $mapping;
+    }
+
+    /**
+     * Updates the mapping of DaySmart Event IDs to WordPress Post IDs in the database.
+     * This function clears all existing mapping entries and inserts the new ones.
+     * Includes input validation/sanitization and error handling for database queries.
+     *
+     * @param array $mapping An associative array where keys are DaySmart Event IDs and values are WordPress Post IDs.
+     */
+    private function set_synced_event_mapping($mapping) {
+        if(WP_DEBUG) error_log(__CLASS__.'::'.__FUNCTION__);
+        if(WP_DEBUG) error_log('Updating mapping with entries: ' . count($mapping));
+
+        // Start a transaction if not already started by the sync_events method (it is, but good practice)
+        // $this->wpdb->query("START TRANSACTION"); // Already done in sync_events
+
+        // It's often simplest to delete all existing mappings and insert the new ones.
+        // For very large datasets, an upsert/batch update might be more efficient.
+        // TRUNCATE is faster than DELETE FROM for clearing the whole table.
+        $truncate_result = $this->wpdb->query("TRUNCATE TABLE {$this->mapping_table_name}");
+        if (false === $truncate_result && ! empty($this->wpdb->last_error)) {
+            error_log('TheEventCalendarExt_Sync - Database error truncating mapping table: ' . $this->wpdb->last_error);
+            // Consider rolling back the main transaction in sync_events if truncation fails
+            // and this is a critical operation. For now, let's assume we proceed
+            // and the next sync will overwrite.
+            return; // Stop processing if truncation fails
+        }
+
+
+        if (!empty($mapping)) {
+            $values = [];
+            $placeholders = [];
+            $date_now = current_time('mysql'); // Get current time in WordPress format
+
+            // Prepare data for batch insert with validation/sanitization
+            foreach ($mapping as $daysmart_id => $wp_post_id) {
+                // Basic validation and sanitization for each entry
+                $sanitized_daysmart_id = sanitize_text_field($daysmart_id);
+                $sanitized_wp_post_id = (int) $wp_post_id; // Ensure it's an integer
+
+                // Only add valid entries to the insert batch
+                if (!empty($sanitized_daysmart_id) && $sanitized_wp_post_id > 0) {
+                    $values[] = $sanitized_daysmart_id;
+                    $values[] = $sanitized_wp_post_id;
+                    $values[] = $date_now;
+                    $placeholders[] = "(%s, %d, %s)";
+                } else {
+                    // Log if we find invalid data in the mapping being passed to this function
+                    error_log('TheEventCalendarExt_Sync - Skipping invalid mapping entry for insertion: DaySmart ID = "' . esc_html($daysmart_id) . '", WP Post ID = "' . esc_html($wp_post_id) . '"');
+                }
+            }
+
+            if (!empty($placeholders)) { // Only insert if there are valid entries
+                $sql = "INSERT INTO {$this->mapping_table_name} (daysmart_event_id, wp_post_id, updated_at) VALUES ";
+                $sql .= implode(', ', $placeholders);
+
+                // Use $wpdb->prepare() for safe query execution
+                $prepared_sql = $this->wpdb->prepare($sql, $values);
+
+                // Execute the insert query
+                $inserted = $this->wpdb->query($prepared_sql);
+
+                // Check for database errors during insertion
+                if (false === $inserted && ! empty($this->wpdb->last_error)) {
+                    error_log('TheEventCalendarExt_Sync - Database error inserting mapping entries: ' . $this->wpdb->last_error);
+                    // This error happens *within* the main transaction of sync_events.
+                    // An exception will be thrown in sync_events and the transaction will be rolled back.
+                } else {
+                    if(WP_DEBUG) error_log('Successfully inserted mapping entries: ' . $inserted . ' rows affected.');
+                }
+            } else {
+                if(WP_DEBUG) error_log('No valid mapping entries to insert after sanitization.');
+            }
+        } else {
+            if(WP_DEBUG) error_log('No mapping entries to insert.');
+        }
+
+        // Transaction commit/rollback is handled by sync_events.
     }
 
 }
